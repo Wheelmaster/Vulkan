@@ -485,6 +485,52 @@ struct Swapchain {
 
 };
 
+VkSampler createTextureSampler(VkDevice device) {
+	VkSamplerCreateInfo samplerInfo = {};
+	samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+	samplerInfo.magFilter = VK_FILTER_LINEAR;
+	samplerInfo.minFilter = VK_FILTER_LINEAR;
+	samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+	samplerInfo.unnormalizedCoordinates = VK_FALSE;
+	samplerInfo.compareEnable = VK_FALSE;
+	samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+	samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+	samplerInfo.mipLodBias = 0.0f;
+	samplerInfo.minLod = 0.0f;
+	samplerInfo.maxLod = 0.0f;
+
+
+	VkSampler textureSampler = VK_NULL_HANDLE;
+    if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create texture sampler!");
+    }
+
+	return textureSampler;
+}
+
+VkImageView createImageView(VkImage image, VkFormat format, VkDevice device) {
+	VkImageViewCreateInfo viewInfo = {};
+	viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+	viewInfo.image = image;
+	viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+	viewInfo.format = format;
+	viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	viewInfo.subresourceRange.baseMipLevel = 0;
+	viewInfo.subresourceRange.levelCount = 1;
+	viewInfo.subresourceRange.baseArrayLayer = 0;
+	viewInfo.subresourceRange.layerCount = 1;
+
+	VkImageView imageView = VK_NULL_HANDLE;
+	if (vkCreateImageView(device, &viewInfo, nullptr, &imageView) != VK_SUCCESS) {
+		throw std::runtime_error("failed to create texture image view!");
+	}
+
+	return imageView;
+}
+
 Swapchain createSwapChain(PhysicalDevice physicalDevice, VkDevice device, VkSurfaceKHR surface) {
 	// Get details about what swapchain parameters are supported
 	SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice.handle, surface);
@@ -576,27 +622,7 @@ Swapchain createSwapChain(PhysicalDevice physicalDevice, VkDevice device, VkSurf
 	// Create image views for all images
 	swapchain.imageViews.resize(imageCount);
 	for (size_t i = 0; i < swapchain.images.size(); i++) {
-		VkImageViewCreateInfo createInfo = {};
-		createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-		createInfo.image = swapchain.images[i];
-
-		createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-		createInfo.format = swapchain.imageFormat;
-
-		createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-		createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-		createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-		createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-
-		createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-		createInfo.subresourceRange.baseMipLevel = 0;
-		createInfo.subresourceRange.levelCount = 1;
-		createInfo.subresourceRange.baseArrayLayer = 0;
-		createInfo.subresourceRange.layerCount = 1;
-
-		if (vkCreateImageView(device, &createInfo, nullptr, &swapchain.imageViews[i]) != VK_SUCCESS) {
-			throw std::runtime_error("failed to create image views!");
-		}
+		swapchain.imageViews[i] = createImageView(swapchain.images[i], swapchain.imageFormat, device);
 	}
 
 	return swapchain;
@@ -877,6 +903,8 @@ Image createTextureImage(VkDevice device, VkQueue graphicsQueue, VkPhysicalDevic
 
 	return textureImage;
 }
+
+
 
 Buffer createVertexBuffer(Device device, VkPhysicalDevice physicalDevice, VkCommandPool commandPool) {
     VkDeviceSize bufferSize = sizeof(VERTICES[0])*VERTICES.size();
@@ -1253,6 +1281,8 @@ private:
 		swapChainFramebuffers = createFramebuffers(device.handle, swapchain, renderPass);
 		commandPool = createCommandPool(physicalDevice, device.handle, surface);
 		textureImage = createTextureImage(device.handle, device.queueGraphics, physicalDevice.handle, commandPool);
+		textureImageView = createImageView(textureImage.handle, VK_FORMAT_R8G8B8A8_UNORM, device.handle);
+		textureSampler = createTextureSampler(device.handle);
 		vertexBuffer = createVertexBuffer(device, physicalDevice.handle, commandPool);
 		indexBuffer = createIndexBuffer(device, physicalDevice.handle, commandPool);
 		uniformBuffer = createUniformBuffer(device.handle, physicalDevice.handle);
@@ -1395,6 +1425,8 @@ private:
     void cleanup() {
 		cleanupSwapChain();
 
+		vkDestroySampler(device.handle, textureSampler, nullptr);
+		vkDestroyImageView(device.handle, textureImageView, nullptr);
 		vkDestroyImage(device.handle, textureImage.handle, nullptr);
 		vkFreeMemory(device.handle, textureImage.memory, nullptr);
 
@@ -1450,6 +1482,8 @@ private:
 	VkDescriptorPool descriptorPool;
 	VkDescriptorSet descriptorSet;
 	Image textureImage;
+	VkImageView textureImageView;
+	VkSampler textureSampler;
 };
 
 int main() {
