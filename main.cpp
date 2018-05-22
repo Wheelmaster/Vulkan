@@ -69,7 +69,9 @@ VmaAllocator allocator = VK_NULL_HANDLE;
 
 class Buffer {
 public:
-	Buffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkDevice device, VkPhysicalDevice physicalDevice) {
+	Buffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkDevice device, VkPhysicalDevice physicalDevice) :
+		device(device) 
+	{
 		// Buffer create info
 		VkBufferCreateInfo bufferInfo = {};
 		bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -94,10 +96,21 @@ public:
 		vmaDestroyBuffer(allocator, handle, allocation);
 	}
 
+	void memCopy(const void *source, VkDeviceSize sizeToMap) {
+		// Copy image data to staging buffer
+		void *destination;
+		if (vkMapMemory(device, memory, 0, sizeToMap, 0, &destination) != VK_SUCCESS) {
+			throw std::runtime_error("failed to map memory");
+		}
+		memcpy(destination, source, sizeToMap);
+		vkUnmapMemory(device, memory);
+	}
+
 	VkBuffer handle;
 	VkDeviceMemory memory;
 
 private:
+	VkDevice device;
 	VmaAllocation allocation;
 };
 
@@ -819,7 +832,7 @@ void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t 
     endSingleTimeCommands(commandBuffer, graphicsQueue, device, commandPool);
 }
 
-void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, VkDevice device, VkQueue graphicsQueue, VkCommandPool commandPool) {
+void transitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout, VkDevice device, VkQueue graphicsQueue, VkCommandPool commandPool) {
     VkCommandBuffer commandBuffer = beginSingleTimeCommands(commandPool, device);
 
 	VkImageMemoryBarrier barrier = {};
@@ -834,9 +847,7 @@ void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayo
 	barrier.subresourceRange.levelCount = 1;
 	barrier.subresourceRange.baseArrayLayer = 0;
 	barrier.subresourceRange.layerCount = 1;
-	barrier.srcAccessMask = 0; // TODO
-	barrier.dstAccessMask = 0; // TODO
-	
+
 	VkPipelineStageFlags sourceStage;
 	VkPipelineStageFlags destinationStage;
 
@@ -880,32 +891,33 @@ void copyBuffer(VkCommandPool commandPool, const Device &device, VkBuffer srcBuf
 
 Image *createTextureImage(VkDevice device, VkQueue graphicsQueue, VkPhysicalDevice physicalDevice, VkCommandPool commandPool) {
     // Load image
-	int texWidth, texHeight, texChannels;
-    stbi_uc* pixels = stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-    VkDeviceSize imageSize = texWidth * texHeight * 4;
+	stbi_uc* pixels = nullptr;
+	int texWidth, texHeight;
+	{
+		int texChannels;
+		pixels = stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
 
-    if (!pixels) {
-        throw std::runtime_error("failed to load texture image!");
-    }
+		if (!pixels) {
+			throw std::runtime_error("failed to load texture image!");
+		}
+	}
+
+	// Get image size in bytes
+	VkDeviceSize imageSize = texWidth*texHeight*4;
 
 	// Create staging buffer
 	Buffer *stagingBuffer = new Buffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, device, physicalDevice);
 	
 	// Copy image data to staging buffer
-	void *data;
-	if (vkMapMemory(device, stagingBuffer->memory, 0, imageSize, 0, &data) != VK_SUCCESS) {
-        throw std::runtime_error("failed to map memory");
-	}
-	memcpy(data, pixels, static_cast<size_t>(imageSize));
-	vkUnmapMemory(device, stagingBuffer->memory);
+	stagingBuffer->memCopy(pixels, imageSize);
 
 	// Free image
 	stbi_image_free(pixels);
 
 	Image *textureImage = new Image(texWidth, texHeight, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, device, physicalDevice);
-	transitionImageLayout(textureImage->handle, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, device, graphicsQueue, commandPool);
+	transitionImageLayout(textureImage->handle, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, device, graphicsQueue, commandPool);
 	copyBufferToImage(stagingBuffer->handle, textureImage->handle, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), device, commandPool, graphicsQueue);
-	transitionImageLayout(textureImage->handle, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, device, graphicsQueue, commandPool);
+	transitionImageLayout(textureImage->handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, device, graphicsQueue, commandPool);
 	
 	delete stagingBuffer;
 
