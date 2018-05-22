@@ -8,6 +8,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#define VMA_IMPLEMENTATION
+#include "vk_mem_alloc.h"
+
 #include <chrono>
 #include <fstream>
 #include <set>
@@ -49,9 +52,53 @@ const std::vector<const char*> DEVICE_EXTENSIONS = {
 	VK_KHR_SWAPCHAIN_EXTENSION_NAME
 };
 
-struct Buffer {
+uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties, VkPhysicalDevice physicalDevice) {
+	VkPhysicalDeviceMemoryProperties memProperties;
+	vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+
+	for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+		if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+			return i;
+		}
+	}
+
+	throw std::runtime_error("failed to find suitable memory type!");
+}
+
+VmaAllocator allocator = VK_NULL_HANDLE;
+
+class Buffer {
+public:
+	Buffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkDevice device, VkPhysicalDevice physicalDevice) {
+		// Buffer create info
+		VkBufferCreateInfo bufferInfo = {};
+		bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		bufferInfo.size = size;
+		bufferInfo.usage = usage;
+		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+		// Memory create info
+		VmaAllocationCreateInfo allocInfo = {};
+		allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+		allocInfo.requiredFlags = properties;
+
+		if (vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &handle, &allocation, nullptr) != VK_SUCCESS) {
+			throw std::runtime_error("Failed to create buffer");
+		}
+
+		// Get handle to memory
+		memory = allocation->GetMemory();
+	}
+
+	~Buffer() {
+		vmaDestroyBuffer(allocator, handle, allocation);
+	}
+
 	VkBuffer handle;
 	VkDeviceMemory memory;
+
+private:
+	VmaAllocation allocation;
 };
 
 struct Image {
@@ -673,48 +720,6 @@ VkCommandPool createCommandPool(PhysicalDevice physicalDevice, VkDevice device, 
 	return commandPool;
 }
 
-uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties, VkPhysicalDevice physicalDevice) {
-	VkPhysicalDeviceMemoryProperties memProperties;
-	vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
-
-	for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-		if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-			return i;
-		}
-	}
-
-	throw std::runtime_error("failed to find suitable memory type!");
-}
-
-Buffer createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkDevice device, VkPhysicalDevice physicalDevice) {
-	VkBufferCreateInfo bufferInfo = {};
-	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-	bufferInfo.size = size;
-	bufferInfo.usage = usage;
-	bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-	Buffer buffer = {};
-	if (vkCreateBuffer(device, &bufferInfo, nullptr, &buffer.handle) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create buffer!");
-	}
-
-	// Allocate buffer memory
-	VkMemoryRequirements memRequirements;
-	vkGetBufferMemoryRequirements(device, buffer.handle, &memRequirements);
-
-	VkMemoryAllocateInfo allocInfo = {};
-	allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-	allocInfo.allocationSize = memRequirements.size;
-	allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties, physicalDevice);
-	if (vkAllocateMemory(device, &allocInfo, nullptr, &buffer.memory) != VK_SUCCESS) {
-		throw std::runtime_error("failed to allocate buffer memory!");
-	}
-
-	vkBindBufferMemory(device, buffer.handle, buffer.memory, 0);
-
-	return buffer;
-}
-
 VkCommandBuffer beginSingleTimeCommands(VkCommandPool commandPool, VkDevice device) {
     VkCommandBufferAllocateInfo allocInfo = {};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -888,68 +893,65 @@ Image createTextureImage(VkDevice device, VkQueue graphicsQueue, VkPhysicalDevic
     }
 
 	// Create staging buffer
-	Buffer stagingBuffer = createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, device, physicalDevice);
-
+	Buffer *stagingBuffer = new Buffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, device, physicalDevice);
+	
 	// Copy image data to staging buffer
 	void *data;
-	vkMapMemory(device, stagingBuffer.memory, 0, imageSize, 0, &data);
+	if (vkMapMemory(device, stagingBuffer->memory, 0, imageSize, 0, &data) != VK_SUCCESS) {
+        throw std::runtime_error("failed to map memory");
+	}
 	memcpy(data, pixels, static_cast<size_t>(imageSize));
-	vkUnmapMemory(device, stagingBuffer.memory);
+	vkUnmapMemory(device, stagingBuffer->memory);
 
 	// Free image
 	stbi_image_free(pixels);
 
 	Image textureImage = createImage(texWidth, texHeight, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, device, physicalDevice);
 	transitionImageLayout(textureImage.handle, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, device, graphicsQueue, commandPool);
-	copyBufferToImage(stagingBuffer.handle, textureImage.handle, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), device, commandPool, graphicsQueue);
+	copyBufferToImage(stagingBuffer->handle, textureImage.handle, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), device, commandPool, graphicsQueue);
 	transitionImageLayout(textureImage.handle, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, device, graphicsQueue, commandPool);
 	
-    vkDestroyBuffer(device, stagingBuffer.handle, nullptr);
-    vkFreeMemory(device, stagingBuffer.memory, nullptr);
+	delete stagingBuffer;
 
 	return textureImage;
 }
 
 
 
-Buffer createVertexBuffer(Device device, VkPhysicalDevice physicalDevice, VkCommandPool commandPool) {
+Buffer *createVertexBuffer(Device device, VkPhysicalDevice physicalDevice, VkCommandPool commandPool) {
     VkDeviceSize bufferSize = sizeof(VERTICES[0])*VERTICES.size();
 
-    Buffer stagingBuffer;
-    stagingBuffer = createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, device.handle, physicalDevice);
+    Buffer *stagingBuffer = new Buffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, device.handle, physicalDevice);
 
     void* data;
-    vkMapMemory(device.handle, stagingBuffer.memory, 0, bufferSize, 0, &data);
+    vkMapMemory(device.handle, stagingBuffer->memory, 0, bufferSize, 0, &data);
 	memcpy(data, VERTICES.data(), (size_t) bufferSize);
-    vkUnmapMemory(device.handle, stagingBuffer.memory);
+    vkUnmapMemory(device.handle, stagingBuffer->memory);
 
-    Buffer vertexBuffer = createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, device.handle, physicalDevice);
+    Buffer *vertexBuffer = new Buffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, device.handle, physicalDevice);
 
-	copyBuffer(commandPool, device, stagingBuffer.handle, vertexBuffer.handle, bufferSize);
+	copyBuffer(commandPool, device, stagingBuffer->handle, vertexBuffer->handle, bufferSize);
 
-    vkDestroyBuffer(device.handle, stagingBuffer.handle, nullptr);
-    vkFreeMemory(device.handle, stagingBuffer.memory, nullptr);
+	delete stagingBuffer;
 
 	return vertexBuffer;
 }
 
-Buffer createIndexBuffer(Device device, VkPhysicalDevice physicalDevice, VkCommandPool commandPool) {
+Buffer *createIndexBuffer(Device device, VkPhysicalDevice physicalDevice, VkCommandPool commandPool) {
     VkDeviceSize bufferSize = sizeof(INDICES[0])*INDICES.size();
 
-    Buffer stagingBuffer;
-    stagingBuffer = createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, device.handle, physicalDevice);
+    Buffer *stagingBuffer = new Buffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, device.handle, physicalDevice);
 
     void* data;
-    vkMapMemory(device.handle, stagingBuffer.memory, 0, bufferSize, 0, &data);
+    vkMapMemory(device.handle, stagingBuffer->memory, 0, bufferSize, 0, &data);
 	memcpy(data, INDICES.data(), (size_t) bufferSize);
-    vkUnmapMemory(device.handle, stagingBuffer.memory);
+    vkUnmapMemory(device.handle, stagingBuffer->memory);
 
-    Buffer indexBuffer = createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, device.handle, physicalDevice);
+    Buffer *indexBuffer = new Buffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, device.handle, physicalDevice);
 
-	copyBuffer(commandPool, device, stagingBuffer.handle, indexBuffer.handle, bufferSize);
+	copyBuffer(commandPool, device, stagingBuffer->handle, indexBuffer->handle, bufferSize);
 
-    vkDestroyBuffer(device.handle, stagingBuffer.handle, nullptr);
-    vkFreeMemory(device.handle, stagingBuffer.memory, nullptr);
+	delete stagingBuffer;
 
 	return indexBuffer;
 }
@@ -1021,9 +1023,9 @@ VkDescriptorSet createDescriptorSet(VkDevice device, VkDescriptorSetLayout descr
 	return descriptorSet;
 }
 
-Buffer createUniformBuffer(VkDevice device, VkPhysicalDevice physicalDevice) {
+Buffer *createUniformBuffer(VkDevice device, VkPhysicalDevice physicalDevice) {
     VkDeviceSize bufferSize = sizeof(UniformBufferObject);
-    return createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, device, physicalDevice);
+    return new Buffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, device, physicalDevice);
 }
 
 std::vector<VkCommandBuffer> createCommandBuffers(VkDevice device, const std::vector<VkFramebuffer> &swapChainFramebuffers, VkCommandPool commandPool, VkRenderPass renderPass, VkExtent2D extent, VkPipeline graphicsPipeline, VkBuffer vertexBuffer, VkBuffer indexBuffer, VkDescriptorSet descriptorSet, VkPipelineLayout pipelineLayout) {
@@ -1287,6 +1289,13 @@ GLFWwindow *initWindow() {
 
 class HelloTriangleApplication {
 public:
+	HelloTriangleApplication() :
+		vertexBuffer(nullptr),
+		indexBuffer(nullptr),
+		uniformBuffer(nullptr)
+	{
+	}
+
     void run() {
 		window = initWindow();
         initVulkan();
@@ -1296,12 +1305,19 @@ public:
 
 private:
 
-    void initVulkan() {
+    void initVulkan() {		
 		instance = createInstance();
 		setupDebugCallback();
 		surface = createSurface(instance, window);
-		physicalDevice = pickPhysicalDevice(instance, surface);
+		physicalDevice = pickPhysicalDevice(instance, surface);					
 		device = createLogicalDevice(physicalDevice, surface);
+
+		// Init memory allocator
+		VmaAllocatorCreateInfo allocatorInfo = {};
+		allocatorInfo.physicalDevice = physicalDevice.handle;
+		allocatorInfo.device = device.handle;
+		vmaCreateAllocator(&allocatorInfo, &allocator);
+
 		swapchain = createSwapChain(physicalDevice, device.handle, surface);		
 		renderPass = createRenderPass(swapchain.imageFormat, device.handle);
 		descriptorSetLayout = createDescriptorSetLayout(device.handle);
@@ -1315,8 +1331,8 @@ private:
 		indexBuffer = createIndexBuffer(device, physicalDevice.handle, commandPool);
 		uniformBuffer = createUniformBuffer(device.handle, physicalDevice.handle);
 		descriptorPool = createDescriptorPool(device.handle);
-		descriptorSet = createDescriptorSet(device.handle, descriptorSetLayout, descriptorPool, uniformBuffer.handle, textureImageView, textureSampler);
-		commandBuffers = createCommandBuffers(device.handle, swapChainFramebuffers, commandPool, renderPass, swapchain.extent, graphicsPipeline.handle, vertexBuffer.handle, indexBuffer.handle, descriptorSet, graphicsPipeline.layout);
+		descriptorSet = createDescriptorSet(device.handle, descriptorSetLayout, descriptorPool, uniformBuffer->handle, textureImageView, textureSampler);
+		commandBuffers = createCommandBuffers(device.handle, swapChainFramebuffers, commandPool, renderPass, swapchain.extent, graphicsPipeline.handle, vertexBuffer->handle, indexBuffer->handle, descriptorSet, graphicsPipeline.layout);
 		createSemaphores(device.handle, &imageAvailableSemaphore, &renderFinishedSemaphore);
     }	
 	
@@ -1358,9 +1374,9 @@ private:
 		ubo.proj[1][1] *= -1;
 
 		void *data;
-		vkMapMemory(device.handle, uniformBuffer.memory, 0, sizeof(ubo), 0, &data);
+		vkMapMemory(device.handle, uniformBuffer->memory, 0, sizeof(ubo), 0, &data);
 		memcpy(data, &ubo, sizeof(ubo));
-		vkUnmapMemory(device.handle, uniformBuffer.memory);
+		vkUnmapMemory(device.handle, uniformBuffer->memory);
 	}
 
 	void drawFrame() {
@@ -1447,11 +1463,20 @@ private:
 		renderPass = createRenderPass(swapchain.imageFormat, device.handle);
 		graphicsPipeline = createGraphicsPipeline(device.handle, swapchain.extent, renderPass, descriptorSetLayout);
 		swapChainFramebuffers = createFramebuffers(device.handle, swapchain, renderPass);
-		commandBuffers = createCommandBuffers(device.handle, swapChainFramebuffers, commandPool, renderPass, swapchain.extent, graphicsPipeline.handle, vertexBuffer.handle, indexBuffer.handle, descriptorSet, graphicsPipeline.layout);
+		commandBuffers = createCommandBuffers(device.handle, swapChainFramebuffers, commandPool, renderPass, swapchain.extent, graphicsPipeline.handle, vertexBuffer->handle, indexBuffer->handle, descriptorSet, graphicsPipeline.layout);
 	}
 
     void cleanup() {
 		cleanupSwapChain();
+
+		delete uniformBuffer;
+		uniformBuffer = nullptr;
+
+		delete vertexBuffer;
+		vertexBuffer = nullptr;
+		
+		delete indexBuffer;
+		indexBuffer = nullptr;
 
 		vkDestroySampler(device.handle, textureSampler, nullptr);
 		vkDestroyImageView(device.handle, textureImageView, nullptr);
@@ -1461,19 +1486,14 @@ private:
 		vkDestroyDescriptorPool(device.handle, descriptorPool, nullptr);
 
 		vkDestroyDescriptorSetLayout(device.handle, descriptorSetLayout, nullptr);
-		vkDestroyBuffer(device.handle, uniformBuffer.handle, nullptr);
-		vkFreeMemory(device.handle, uniformBuffer.memory, nullptr);
-
-	    vkDestroyBuffer(device.handle, vertexBuffer.handle, nullptr);
-		vkFreeMemory(device.handle, vertexBuffer.memory, nullptr);
-
-	    vkDestroyBuffer(device.handle, indexBuffer.handle, nullptr);
-		vkFreeMemory(device.handle, indexBuffer.memory, nullptr);
 
 		vkDestroySemaphore(device.handle, imageAvailableSemaphore, nullptr);
 		vkDestroySemaphore(device.handle, renderFinishedSemaphore, nullptr);
 
 		vkDestroyCommandPool(device.handle, commandPool, nullptr);
+
+		vmaDestroyAllocator(allocator);
+		allocator = VK_NULL_HANDLE;
 
 		vkDestroyDevice(device.handle, nullptr);
 
@@ -1504,9 +1524,9 @@ private:
 	std::vector<VkCommandBuffer> commandBuffers;
 	VkSemaphore imageAvailableSemaphore;
 	VkSemaphore renderFinishedSemaphore;
-	Buffer vertexBuffer;
-	Buffer indexBuffer;
-	Buffer uniformBuffer;
+	Buffer *vertexBuffer;
+	Buffer *indexBuffer;
+	Buffer *uniformBuffer;
 	VkDescriptorPool descriptorPool;
 	VkDescriptorSet descriptorSet;
 	Image textureImage;
