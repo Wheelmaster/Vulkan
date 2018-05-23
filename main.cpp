@@ -144,7 +144,6 @@ VkDebugReportCallbackEXT callback;
 PhysicalDevice physicalDevice;
 Device device;
 
-GLFWwindow *window;
 VkSurfaceKHR surface;
 
 class Buffer {
@@ -354,7 +353,7 @@ VkRenderPass createRenderPass(VkFormat swapChainImageFormat) {
 	return renderPass;
 }
 
-VkInstance createInstance() {
+void createInstance() {
 	if (enableValidationLayers && !checkValidationLayerSupport()) {
 		throw std::runtime_error("validation layers requested, but not available!");
 	}
@@ -383,22 +382,16 @@ VkInstance createInstance() {
 	createInfo.ppEnabledExtensionNames = extensions.data();
 
 	// Create instance
-	VkInstance instance = VK_NULL_HANDLE;
 	if (vkCreateInstance(&createInfo, nullptr, &instance) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create instance!");
 	}
-
-	return instance;
 }
 
 // Create a surface tied to the window that Vulkan can use for presenting
-VkSurfaceKHR createSurface() {
-	VkSurfaceKHR surface = VK_NULL_HANDLE;
+void createSurface(GLFWwindow *window) {
 	if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create window surface!");
 	}
-
-	return surface;
 }
 
 bool checkDeviceExtensionSupport(VkPhysicalDevice device) {
@@ -453,7 +446,7 @@ bool isDeviceSuitable(PhysicalDevice device) {
 }
 
 // Pick one of the available physical devices to use
-PhysicalDevice pickPhysicalDevice() {	
+void pickPhysicalDevice() {	
 	PhysicalDevice selectedDevice = {};
 
 	uint32_t deviceCount = 0;
@@ -536,10 +529,10 @@ PhysicalDevice pickPhysicalDevice() {
 		std::cout << "Selected physical device: " << properties.deviceName << std::endl;
 	}
 
-	return selectedDevice;
+	physicalDevice = selectedDevice;
 }
 
-Device createLogicalDevice() {
+void createLogicalDevice() {
 	std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
 	{ // Prepare queue creation parameters
 		std::set<int> uniqueQueueFamilies = {physicalDevice.queueFamilyIndexGraphics, physicalDevice.queueFamilyIndexPresent}; // Use a set to 
@@ -572,15 +565,12 @@ Device createLogicalDevice() {
 		createInfo.enabledLayerCount = 0;
 	}
 
-	Device device = {};
 	if (vkCreateDevice(physicalDevice.handle, &createInfo, nullptr, &device.handle) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create logical device!");
 	}
 
 	vkGetDeviceQueue(device.handle, physicalDevice.queueFamilyIndexGraphics, 0, &device.queueGraphics);
 	vkGetDeviceQueue(device.handle, physicalDevice.queueFamilyIndexPresent, 0, &device.queuePresent);
-
-	return device;
 }
 
 struct Swapchain {
@@ -1320,13 +1310,14 @@ public:
     }
 
 private:
+	GLFWwindow *window;
 
     void initVulkan() {		
-		instance = createInstance();
+		createInstance();
 		setupDebugCallback();
-		surface = createSurface();
-		physicalDevice = pickPhysicalDevice();
-		device = createLogicalDevice();
+		createSurface(window);
+		pickPhysicalDevice();
+		createLogicalDevice();
 
 		// Init memory allocator
 		VmaAllocatorCreateInfo allocatorInfo = {};
