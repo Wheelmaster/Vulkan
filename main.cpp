@@ -139,8 +139,12 @@ struct SwapChainSupportDetails {
 };
 
 VkInstance instance;
+VkDebugReportCallbackEXT callback;
+
 PhysicalDevice physicalDevice;
 Device device;
+
+GLFWwindow *window;
 VkSurfaceKHR surface;
 
 class Buffer {
@@ -298,7 +302,7 @@ VkResult CreateDebugReportCallbackEXT(const VkDebugReportCallbackCreateInfoEXT* 
     }
 }
 
-void DestroyDebugReportCallbackEXT(VkDebugReportCallbackEXT callback, const VkAllocationCallbacks* pAllocator) {
+void DestroyDebugReportCallbackEXT(const VkAllocationCallbacks* pAllocator) {
     auto func = (PFN_vkDestroyDebugReportCallbackEXT) vkGetInstanceProcAddr(instance, "vkDestroyDebugReportCallbackEXT");
     if (func != nullptr) {
         func(instance, callback, pAllocator);
@@ -388,7 +392,7 @@ VkInstance createInstance() {
 }
 
 // Create a surface tied to the window that Vulkan can use for presenting
-VkSurfaceKHR createSurface(GLFWwindow *window) {
+VkSurfaceKHR createSurface() {
 	VkSurfaceKHR surface = VK_NULL_HANDLE;
 	if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create window surface!");
@@ -1320,7 +1324,7 @@ private:
     void initVulkan() {		
 		instance = createInstance();
 		setupDebugCallback();
-		surface = createSurface(window);
+		surface = createSurface();
 		physicalDevice = pickPhysicalDevice();
 		device = createLogicalDevice();
 
@@ -1511,7 +1515,7 @@ private:
 		vkDestroyDevice(device.handle, nullptr);
 
 		if (enableValidationLayers) {
-			DestroyDebugReportCallbackEXT(callback, nullptr);
+			DestroyDebugReportCallbackEXT(nullptr);
 		}
 
 		vkDestroySurfaceKHR(instance, surface, nullptr);
@@ -1522,8 +1526,6 @@ private:
 		glfwTerminate();
     }
 
-	GLFWwindow *window;
-	VkDebugReportCallbackEXT callback;
 	Swapchain swapchain;		
 	VkRenderPass renderPass;
 	VkDescriptorSetLayout descriptorSetLayout;
