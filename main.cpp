@@ -52,21 +52,6 @@ const std::vector<const char*> DEVICE_EXTENSIONS = {
 	VK_KHR_SWAPCHAIN_EXTENSION_NAME
 };
 
-uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties, VkPhysicalDevice physicalDevice) {
-	VkPhysicalDeviceMemoryProperties memProperties;
-	vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
-
-	for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-		if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-			return i;
-		}
-	}
-
-	throw std::runtime_error("failed to find suitable memory type!");
-}
-
-VmaAllocator allocator = VK_NULL_HANDLE;
-
 struct UniformBufferObject {
     glm::mat4 model;
     glm::mat4 view;
@@ -137,6 +122,8 @@ struct SwapChainSupportDetails {
     std::vector<VkSurfaceFormatKHR> formats;
     std::vector<VkPresentModeKHR> presentModes;
 };
+
+VmaAllocator allocator = VK_NULL_HANDLE;
 
 VkInstance instance;
 VkDebugReportCallbackEXT callback;
@@ -764,7 +751,7 @@ VkCommandPool createCommandPool() {
 	return commandPool;
 }
 
-VkCommandBuffer beginSingleTimeCommands(VkCommandPool commandPool, VkDevice device) {
+VkCommandBuffer beginSingleTimeCommands(VkCommandPool commandPool) {
     VkCommandBufferAllocateInfo allocInfo = {};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -772,7 +759,7 @@ VkCommandBuffer beginSingleTimeCommands(VkCommandPool commandPool, VkDevice devi
     allocInfo.commandBufferCount = 1;
 
     VkCommandBuffer commandBuffer;
-    vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+    vkAllocateCommandBuffers(device.handle, &allocInfo, &commandBuffer);
 
     VkCommandBufferBeginInfo beginInfo = {};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -783,7 +770,7 @@ VkCommandBuffer beginSingleTimeCommands(VkCommandPool commandPool, VkDevice devi
     return commandBuffer;
 }
 
-void endSingleTimeCommands(VkCommandBuffer commandBuffer, VkQueue graphicsQueue, VkDevice device, VkCommandPool commandPool) {
+void endSingleTimeCommands(VkCommandBuffer commandBuffer, VkCommandPool commandPool) {
     vkEndCommandBuffer(commandBuffer);
 
     VkSubmitInfo submitInfo = {};
@@ -791,14 +778,14 @@ void endSingleTimeCommands(VkCommandBuffer commandBuffer, VkQueue graphicsQueue,
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &commandBuffer;
 
-    vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(graphicsQueue);
+    vkQueueSubmit(device.queueGraphics, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(device.queueGraphics);
 
-    vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+    vkFreeCommandBuffers(device.handle, commandPool, 1, &commandBuffer);
 }
 
-void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, VkCommandPool commandPool, VkQueue graphicsQueue) {
-    VkCommandBuffer commandBuffer = beginSingleTimeCommands(commandPool, device.handle);
+void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, VkCommandPool commandPool) {
+    VkCommandBuffer commandBuffer = beginSingleTimeCommands(commandPool);
 
 	VkBufferImageCopy region = {};
 	region.bufferOffset = 0;
@@ -826,11 +813,11 @@ void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t 
 		&region
 	);
 
-    endSingleTimeCommands(commandBuffer, graphicsQueue, device.handle, commandPool);
+    endSingleTimeCommands(commandBuffer, commandPool);
 }
 
-void transitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout, VkQueue graphicsQueue, VkCommandPool commandPool) {
-    VkCommandBuffer commandBuffer = beginSingleTimeCommands(commandPool, device.handle);
+void transitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout, VkCommandPool commandPool) {
+    VkCommandBuffer commandBuffer = beginSingleTimeCommands(commandPool);
 
 	VkImageMemoryBarrier barrier = {};
 	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -873,20 +860,20 @@ void transitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout
 		1, &barrier
 	);
 
-    endSingleTimeCommands(commandBuffer, graphicsQueue, device.handle, commandPool);
+    endSingleTimeCommands(commandBuffer, commandPool);
 }
 
-void copyBuffer(VkCommandPool commandPool, VkDevice device, VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size, VkQueue queueGraphics) {
-    VkCommandBuffer commandBuffer = beginSingleTimeCommands(commandPool, device);
+void copyBuffer(VkCommandPool commandPool, VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
+    VkCommandBuffer commandBuffer = beginSingleTimeCommands(commandPool);
 
     VkBufferCopy copyRegion = {};
     copyRegion.size = size;
     vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
 
-    endSingleTimeCommands(commandBuffer, queueGraphics, device, commandPool);
+    endSingleTimeCommands(commandBuffer, commandPool);
 }
 
-Image *createTextureImage(VkQueue graphicsQueue, VkCommandPool commandPool) {
+Image *createTextureImage(VkCommandPool commandPool) {
     // Load image
 	stbi_uc* pixels = nullptr;
 	int texWidth, texHeight;
@@ -912,9 +899,9 @@ Image *createTextureImage(VkQueue graphicsQueue, VkCommandPool commandPool) {
 	stbi_image_free(pixels);
 
 	Image *textureImage = new Image(texWidth, texHeight, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-	transitionImageLayout(textureImage->handle, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, graphicsQueue, commandPool);
-	copyBufferToImage(stagingBuffer->handle, textureImage->handle, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), commandPool, graphicsQueue);
-	transitionImageLayout(textureImage->handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, graphicsQueue, commandPool);
+	transitionImageLayout(textureImage->handle, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, commandPool);
+	copyBufferToImage(stagingBuffer->handle, textureImage->handle, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), commandPool);
+	transitionImageLayout(textureImage->handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, commandPool);
 	
 	delete stagingBuffer;
 
@@ -935,7 +922,7 @@ Buffer *createVertexBuffer(VkCommandPool commandPool) {
 
     Buffer *vertexBuffer = new Buffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-	copyBuffer(commandPool, device.handle, stagingBuffer->handle, vertexBuffer->handle, bufferSize, device.queueGraphics);
+	copyBuffer(commandPool, stagingBuffer->handle, vertexBuffer->handle, bufferSize);
 
 	delete stagingBuffer;
 
@@ -954,7 +941,7 @@ Buffer *createIndexBuffer(VkCommandPool commandPool) {
 
     Buffer *indexBuffer = new Buffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-	copyBuffer(commandPool, device.handle, stagingBuffer->handle, indexBuffer->handle, bufferSize, device.queueGraphics);
+	copyBuffer(commandPool, stagingBuffer->handle, indexBuffer->handle, bufferSize);
 
 	delete stagingBuffer;
 
@@ -1098,14 +1085,14 @@ void createSemaphores(VkSemaphore *imageAvailableSemaphore, VkSemaphore *renderF
 	}
 }
 
-VkShaderModule createShaderModule(VkDevice device, const std::vector<char>& code) {
+VkShaderModule createShaderModule(const std::vector<char>& code) {
 	VkShaderModuleCreateInfo createInfo = {};
 	createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
 	createInfo.codeSize = code.size();
 	createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
 
 	VkShaderModule shaderModule;
-	if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+	if (vkCreateShaderModule(device.handle, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create shader module!");
 	}
 
@@ -1150,8 +1137,8 @@ GraphicsPipeline createGraphicsPipeline(VkExtent2D extent, VkRenderPass renderPa
 	const std::vector<char> vertShaderCode = readFile("shaders/vert.spv");
 	const std::vector<char> fragShaderCode = readFile("shaders/frag.spv");
 	
-	const VkShaderModule vertShaderModule = createShaderModule(device.handle, vertShaderCode);
-	const VkShaderModule fragShaderModule = createShaderModule(device.handle, fragShaderCode);
+	const VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
+	const VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
 
 	VkPipelineShaderStageCreateInfo vertShaderStageInfo = {};
 	vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1331,7 +1318,7 @@ private:
 		graphicsPipeline = createGraphicsPipeline(swapchain.extent, renderPass, descriptorSetLayout);
 		swapChainFramebuffers = createFramebuffers(swapchain, renderPass);
 		commandPool = createCommandPool();
-		textureImage = createTextureImage(device.queueGraphics, commandPool);
+		textureImage = createTextureImage(commandPool);
 		textureImageView = createImageView(textureImage->handle, VK_FORMAT_R8G8B8A8_UNORM);
 		textureSampler = createTextureSampler();
 		vertexBuffer = createVertexBuffer(commandPool);
