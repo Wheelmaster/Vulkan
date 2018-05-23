@@ -133,6 +133,9 @@ Device device;
 
 VkSurfaceKHR surface;
 
+VkCommandPool commandPool;
+
+
 class Buffer {
 public:
 	Buffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties) {
@@ -737,21 +740,17 @@ std::vector<VkFramebuffer> createFramebuffers(const Swapchain &swapchain, VkRend
 	return swapChainFramebuffers;
 }
 
-VkCommandPool createCommandPool() {
+void createCommandPool() {
 	VkCommandPoolCreateInfo poolInfo = {};
 	poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-	poolInfo.queueFamilyIndex = physicalDevice.queueFamilyIndexGraphics;
-	poolInfo.flags = 0; // Optional
-
-	VkCommandPool commandPool = VK_NULL_HANDLE;
+	poolInfo.queueFamilyIndex = physicalDevice.queueFamilyIndexGraphics;	
+	
 	if (vkCreateCommandPool(device.handle, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create command pool!");
 	}
-
-	return commandPool;
 }
 
-VkCommandBuffer beginSingleTimeCommands(VkCommandPool commandPool) {
+VkCommandBuffer beginSingleTimeCommands() {
     VkCommandBufferAllocateInfo allocInfo = {};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -770,7 +769,7 @@ VkCommandBuffer beginSingleTimeCommands(VkCommandPool commandPool) {
     return commandBuffer;
 }
 
-void endSingleTimeCommands(VkCommandBuffer commandBuffer, VkCommandPool commandPool) {
+void endSingleTimeCommands(VkCommandBuffer commandBuffer) {
     vkEndCommandBuffer(commandBuffer);
 
     VkSubmitInfo submitInfo = {};
@@ -784,8 +783,8 @@ void endSingleTimeCommands(VkCommandBuffer commandBuffer, VkCommandPool commandP
     vkFreeCommandBuffers(device.handle, commandPool, 1, &commandBuffer);
 }
 
-void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, VkCommandPool commandPool) {
-    VkCommandBuffer commandBuffer = beginSingleTimeCommands(commandPool);
+void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height) {
+    VkCommandBuffer commandBuffer = beginSingleTimeCommands();
 
 	VkBufferImageCopy region = {};
 	region.bufferOffset = 0;
@@ -813,11 +812,11 @@ void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t 
 		&region
 	);
 
-    endSingleTimeCommands(commandBuffer, commandPool);
+    endSingleTimeCommands(commandBuffer);
 }
 
-void transitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout, VkCommandPool commandPool) {
-    VkCommandBuffer commandBuffer = beginSingleTimeCommands(commandPool);
+void transitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout) {
+    VkCommandBuffer commandBuffer = beginSingleTimeCommands();
 
 	VkImageMemoryBarrier barrier = {};
 	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -860,20 +859,20 @@ void transitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout
 		1, &barrier
 	);
 
-    endSingleTimeCommands(commandBuffer, commandPool);
+    endSingleTimeCommands(commandBuffer);
 }
 
-void copyBuffer(VkCommandPool commandPool, VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
-    VkCommandBuffer commandBuffer = beginSingleTimeCommands(commandPool);
+void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
+    VkCommandBuffer commandBuffer = beginSingleTimeCommands();
 
     VkBufferCopy copyRegion = {};
     copyRegion.size = size;
     vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
 
-    endSingleTimeCommands(commandBuffer, commandPool);
+    endSingleTimeCommands(commandBuffer);
 }
 
-Image *createTextureImage(VkCommandPool commandPool) {
+Image *createTextureImage() {
     // Load image
 	stbi_uc* pixels = nullptr;
 	int texWidth, texHeight;
@@ -899,9 +898,9 @@ Image *createTextureImage(VkCommandPool commandPool) {
 	stbi_image_free(pixels);
 
 	Image *textureImage = new Image(texWidth, texHeight, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-	transitionImageLayout(textureImage->handle, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, commandPool);
-	copyBufferToImage(stagingBuffer->handle, textureImage->handle, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), commandPool);
-	transitionImageLayout(textureImage->handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, commandPool);
+	transitionImageLayout(textureImage->handle, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+	copyBufferToImage(stagingBuffer->handle, textureImage->handle, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+	transitionImageLayout(textureImage->handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 	
 	delete stagingBuffer;
 
@@ -910,7 +909,7 @@ Image *createTextureImage(VkCommandPool commandPool) {
 
 
 
-Buffer *createVertexBuffer(VkCommandPool commandPool) {
+Buffer *createVertexBuffer() {
     VkDeviceSize bufferSize = sizeof(VERTICES[0])*VERTICES.size();
 
     Buffer *stagingBuffer = new Buffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -922,14 +921,14 @@ Buffer *createVertexBuffer(VkCommandPool commandPool) {
 
     Buffer *vertexBuffer = new Buffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-	copyBuffer(commandPool, stagingBuffer->handle, vertexBuffer->handle, bufferSize);
+	copyBuffer(stagingBuffer->handle, vertexBuffer->handle, bufferSize);
 
 	delete stagingBuffer;
 
 	return vertexBuffer;
 }
 
-Buffer *createIndexBuffer(VkCommandPool commandPool) {
+Buffer *createIndexBuffer() {
     VkDeviceSize bufferSize = sizeof(INDICES[0])*INDICES.size();
 
     Buffer *stagingBuffer = new Buffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -941,7 +940,7 @@ Buffer *createIndexBuffer(VkCommandPool commandPool) {
 
     Buffer *indexBuffer = new Buffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-	copyBuffer(commandPool, stagingBuffer->handle, indexBuffer->handle, bufferSize);
+	copyBuffer(stagingBuffer->handle, indexBuffer->handle, bufferSize);
 
 	delete stagingBuffer;
 
@@ -1020,7 +1019,7 @@ Buffer *createUniformBuffer() {
     return new Buffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 }
 
-std::vector<VkCommandBuffer> createCommandBuffers(const std::vector<VkFramebuffer> &swapChainFramebuffers, VkCommandPool commandPool, VkRenderPass renderPass, VkExtent2D extent, VkPipeline graphicsPipeline, VkBuffer vertexBuffer, VkBuffer indexBuffer, VkDescriptorSet descriptorSet, VkPipelineLayout pipelineLayout) {
+std::vector<VkCommandBuffer> createCommandBuffers(const std::vector<VkFramebuffer> &swapChainFramebuffers, VkRenderPass renderPass, VkExtent2D extent, VkPipeline graphicsPipeline, VkBuffer vertexBuffer, VkBuffer indexBuffer, VkDescriptorSet descriptorSet, VkPipelineLayout pipelineLayout) {
 	std::vector<VkCommandBuffer> commandBuffers(swapChainFramebuffers.size());
 
 	VkCommandBufferAllocateInfo allocInfo = {};
@@ -1305,6 +1304,7 @@ private:
 		createSurface(window);
 		pickPhysicalDevice();
 		createLogicalDevice();
+		createCommandPool();
 
 		// Init memory allocator
 		VmaAllocatorCreateInfo allocatorInfo = {};
@@ -1317,16 +1317,16 @@ private:
 		descriptorSetLayout = createDescriptorSetLayout();
 		graphicsPipeline = createGraphicsPipeline(swapchain.extent, renderPass, descriptorSetLayout);
 		swapChainFramebuffers = createFramebuffers(swapchain, renderPass);
-		commandPool = createCommandPool();
-		textureImage = createTextureImage(commandPool);
+		
+		textureImage = createTextureImage();
 		textureImageView = createImageView(textureImage->handle, VK_FORMAT_R8G8B8A8_UNORM);
 		textureSampler = createTextureSampler();
-		vertexBuffer = createVertexBuffer(commandPool);
-		indexBuffer = createIndexBuffer(commandPool);
+		vertexBuffer = createVertexBuffer();
+		indexBuffer = createIndexBuffer();
 		uniformBuffer = createUniformBuffer();
 		descriptorPool = createDescriptorPool();
 		descriptorSet = createDescriptorSet(descriptorSetLayout, descriptorPool, uniformBuffer->handle, textureImageView, textureSampler);
-		commandBuffers = createCommandBuffers(swapChainFramebuffers, commandPool, renderPass, swapchain.extent, graphicsPipeline.handle, vertexBuffer->handle, indexBuffer->handle, descriptorSet, graphicsPipeline.layout);
+		commandBuffers = createCommandBuffers(swapChainFramebuffers, renderPass, swapchain.extent, graphicsPipeline.handle, vertexBuffer->handle, indexBuffer->handle, descriptorSet, graphicsPipeline.layout);
 		createSemaphores(&imageAvailableSemaphore, &renderFinishedSemaphore);
     }	
 	
@@ -1457,7 +1457,7 @@ private:
 		renderPass = createRenderPass(swapchain.imageFormat);
 		graphicsPipeline = createGraphicsPipeline(swapchain.extent, renderPass, descriptorSetLayout);
 		swapChainFramebuffers = createFramebuffers(swapchain, renderPass);
-		commandBuffers = createCommandBuffers(swapChainFramebuffers, commandPool, renderPass, swapchain.extent, graphicsPipeline.handle, vertexBuffer->handle, indexBuffer->handle, descriptorSet, graphicsPipeline.layout);
+		commandBuffers = createCommandBuffers(swapChainFramebuffers, renderPass, swapchain.extent, graphicsPipeline.handle, vertexBuffer->handle, indexBuffer->handle, descriptorSet, graphicsPipeline.layout);
 	}
 
     void cleanup() {
@@ -1509,7 +1509,6 @@ private:
 	VkDescriptorSetLayout descriptorSetLayout;
 	GraphicsPipeline graphicsPipeline;
 	std::vector<VkFramebuffer> swapChainFramebuffers;
-	VkCommandPool commandPool;
 	std::vector<VkCommandBuffer> commandBuffers;
 	VkSemaphore imageAvailableSemaphore;
 	VkSemaphore renderFinishedSemaphore;
