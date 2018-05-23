@@ -138,8 +138,10 @@ struct SwapChainSupportDetails {
     std::vector<VkPresentModeKHR> presentModes;
 };
 
+VkInstance instance;
 PhysicalDevice physicalDevice;
 Device device;
+VkSurfaceKHR surface;
 
 class Buffer {
 public:
@@ -287,7 +289,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     return VK_FALSE;
 }
 
-VkResult CreateDebugReportCallbackEXT(VkInstance instance, const VkDebugReportCallbackCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugReportCallbackEXT* pCallback) {
+VkResult CreateDebugReportCallbackEXT(const VkDebugReportCallbackCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugReportCallbackEXT* pCallback) {
     auto func = (PFN_vkCreateDebugReportCallbackEXT) vkGetInstanceProcAddr(instance, "vkCreateDebugReportCallbackEXT");
     if (func != nullptr) {
         return func(instance, pCreateInfo, pAllocator, pCallback);
@@ -296,7 +298,7 @@ VkResult CreateDebugReportCallbackEXT(VkInstance instance, const VkDebugReportCa
     }
 }
 
-void DestroyDebugReportCallbackEXT(VkInstance instance, VkDebugReportCallbackEXT callback, const VkAllocationCallbacks* pAllocator) {
+void DestroyDebugReportCallbackEXT(VkDebugReportCallbackEXT callback, const VkAllocationCallbacks* pAllocator) {
     auto func = (PFN_vkDestroyDebugReportCallbackEXT) vkGetInstanceProcAddr(instance, "vkDestroyDebugReportCallbackEXT");
     if (func != nullptr) {
         func(instance, callback, pAllocator);
@@ -386,7 +388,7 @@ VkInstance createInstance() {
 }
 
 // Create a surface tied to the window that Vulkan can use for presenting
-VkSurfaceKHR createSurface(VkInstance instance, GLFWwindow *window) {
+VkSurfaceKHR createSurface(GLFWwindow *window) {
 	VkSurfaceKHR surface = VK_NULL_HANDLE;
 	if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create window surface!");
@@ -411,7 +413,7 @@ bool checkDeviceExtensionSupport(VkPhysicalDevice device) {
 	return requiredExtensions.empty();
 }
 
-SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device, VkSurfaceKHR surface) {
+SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device) {
 	// Get the supported number of swapchain images and range of resolutions supported by the surface
 	SwapChainSupportDetails details;
 	vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &details.capabilities);
@@ -435,11 +437,11 @@ SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device, VkSurface
 	return details;
 }
 
-bool isDeviceSuitable(PhysicalDevice device, VkSurfaceKHR surface) {
+bool isDeviceSuitable(PhysicalDevice device) {
 	bool extensionsSupported = checkDeviceExtensionSupport(device.handle);
 	bool swapChainAdequate = false;
 	if (extensionsSupported) {
-		SwapChainSupportDetails swapChainSupport = querySwapChainSupport(device.handle, surface);
+		SwapChainSupportDetails swapChainSupport = querySwapChainSupport(device.handle);
 		swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
 	}
 
@@ -447,7 +449,7 @@ bool isDeviceSuitable(PhysicalDevice device, VkSurfaceKHR surface) {
 }
 
 // Pick one of the available physical devices to use
-PhysicalDevice pickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface) {	
+PhysicalDevice pickPhysicalDevice() {	
 	PhysicalDevice selectedDevice = {};
 
 	uint32_t deviceCount = 0;
@@ -501,7 +503,7 @@ PhysicalDevice pickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface) {
 			}
 		}
 
-		if (isDeviceSuitable(device, surface)) {
+		if (isDeviceSuitable(device)) {
 			// Get suitability score
 			int score = 0;
 			
@@ -533,7 +535,7 @@ PhysicalDevice pickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface) {
 	return selectedDevice;
 }
 
-Device createLogicalDevice(VkSurfaceKHR surface) {
+Device createLogicalDevice() {
 	std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
 	{ // Prepare queue creation parameters
 		std::set<int> uniqueQueueFamilies = {physicalDevice.queueFamilyIndexGraphics, physicalDevice.queueFamilyIndexPresent}; // Use a set to 
@@ -632,9 +634,9 @@ VkImageView createImageView(VkImage image, VkFormat format) {
 	return imageView;
 }
 
-Swapchain createSwapChain(VkSurfaceKHR surface) {
+Swapchain createSwapChain() {
 	// Get details about what swapchain parameters are supported
-	SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice.handle, surface);
+	SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice.handle);
 
 	// Get surface format
 	VkSurfaceFormatKHR surfaceFormat = {};
@@ -754,7 +756,7 @@ std::vector<VkFramebuffer> createFramebuffers(const Swapchain &swapchain, VkRend
 	return swapChainFramebuffers;
 }
 
-VkCommandPool createCommandPool(VkSurfaceKHR surface) {
+VkCommandPool createCommandPool() {
 	VkCommandPoolCreateInfo poolInfo = {};
 	poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 	poolInfo.queueFamilyIndex = physicalDevice.queueFamilyIndexGraphics;
@@ -1318,9 +1320,9 @@ private:
     void initVulkan() {		
 		instance = createInstance();
 		setupDebugCallback();
-		surface = createSurface(instance, window);
-		physicalDevice = pickPhysicalDevice(instance, surface);					
-		device = createLogicalDevice(surface);
+		surface = createSurface(window);
+		physicalDevice = pickPhysicalDevice();
+		device = createLogicalDevice();
 
 		// Init memory allocator
 		VmaAllocatorCreateInfo allocatorInfo = {};
@@ -1328,12 +1330,12 @@ private:
 		allocatorInfo.device = device.handle;
 		vmaCreateAllocator(&allocatorInfo, &allocator);
 
-		swapchain = createSwapChain(surface);		
+		swapchain = createSwapChain();		
 		renderPass = createRenderPass(swapchain.imageFormat);
 		descriptorSetLayout = createDescriptorSetLayout();
 		graphicsPipeline = createGraphicsPipeline(swapchain.extent, renderPass, descriptorSetLayout);
 		swapChainFramebuffers = createFramebuffers(swapchain, renderPass);
-		commandPool = createCommandPool(surface);
+		commandPool = createCommandPool();
 		textureImage = createTextureImage(device.queueGraphics, commandPool);
 		textureImageView = createImageView(textureImage->handle, VK_FORMAT_R8G8B8A8_UNORM);
 		textureSampler = createTextureSampler();
@@ -1354,7 +1356,7 @@ private:
 		createInfo.flags = VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT;
 		createInfo.pfnCallback = debugCallback;
 
-		if (CreateDebugReportCallbackEXT(instance, &createInfo, nullptr, &callback) != VK_SUCCESS) {
+		if (CreateDebugReportCallbackEXT(&createInfo, nullptr, &callback) != VK_SUCCESS) {
 			throw std::runtime_error("failed to set up debug callback!");
 		}
 	}
@@ -1469,7 +1471,7 @@ private:
 
 		cleanupSwapChain();
 
-		swapchain = createSwapChain(surface);		
+		swapchain = createSwapChain();
 		renderPass = createRenderPass(swapchain.imageFormat);
 		graphicsPipeline = createGraphicsPipeline(swapchain.extent, renderPass, descriptorSetLayout);
 		swapChainFramebuffers = createFramebuffers(swapchain, renderPass);
@@ -1509,7 +1511,7 @@ private:
 		vkDestroyDevice(device.handle, nullptr);
 
 		if (enableValidationLayers) {
-			DestroyDebugReportCallbackEXT(instance, callback, nullptr);
+			DestroyDebugReportCallbackEXT(callback, nullptr);
 		}
 
 		vkDestroySurfaceKHR(instance, surface, nullptr);
@@ -1521,9 +1523,7 @@ private:
     }
 
 	GLFWwindow *window;
-	VkInstance instance;
 	VkDebugReportCallbackEXT callback;
-	VkSurfaceKHR surface;
 	Swapchain swapchain;		
 	VkRenderPass renderPass;
 	VkDescriptorSetLayout descriptorSetLayout;
